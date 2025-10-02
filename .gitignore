@@ -1,0 +1,8 @@
+*.crt
+*.pem
+*.cer
+*.har
+*.csv
+*.log
+clean-up-old-certs.ps1
+Prisma-Troubleshooting-Tools.ps1
