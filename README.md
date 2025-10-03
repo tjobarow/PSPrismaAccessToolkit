@@ -44,6 +44,7 @@ Checks if the root certificate at "C:\certs\myroot.crt" is present in the certif
 ```powershell
 Test-SSLDecryption -hostname "example.com" -RootCertPath "C:\certs\myroot.crt"
 ```
+___Note:___ _This command must be ran from the affected endpoint where decryption might be taking place. It essentially checks for the presence of the provided root certificate in the certificate chain presented by the destination server during TLS negotiation_.
 
 ### Analyze a HAR file for hostnames that are being decrypted
 
@@ -52,6 +53,7 @@ Analyzes ".\mycapture.har" and checks if SSL decryption is occurring for each fa
 ```powershell
 Test-HarFileForDecryptedUrls -HarFilePath ".\mycapture.har" -RootCertPath ".\root.crt"
 ```
+___Note:___ _This command must be ran from the affected endpoint where decryption might be taking place. It uses a derivative of the above ```Test-SSLDecryption``` command behind the scenes_.
 
 ### Get unique domains from a HAR file
 
@@ -62,11 +64,13 @@ Get-HarFileUniqueDomains -Path ".\mycapture.har"
 
 ### Export Palo Alto/GlobalProtect logs to CSV:
 
-Parses the PanGPS.log file, includes only entries since the specified date/time, and returns the parsed logs in an array of PSCustomObjects instead of exporting them CSV.
+Parses the the PAN***.log files (PanGPS.log, PanGPA.log, etc), includes only entries since the specified date/time, and returns the parsed logs in an array of PSCustomObjects instead of exporting them CSV.
 
 ```powershell
 Export-PanLogFileToCsv -Path ".\PanGPS.log" -Since "07/30/25 08:55" -ReturnObject
 ```
+
+___Note:___ This command can parse log files that are in the same log format as PanGPS.log or PanGPA.log. It has only been tested against PanGPS.log and PanGPA.log, though, so results may vary.
 
 ## Module commands
 
@@ -85,11 +89,15 @@ Implemented functions (confirm with Get-Command):
 
 See the included LICENSE file for license terms.
 
+## Disclaimer
+1. Certain commands in this module are relient on Palo Alto features that might be subject to change, such as log formats. It's entirely possible that changes made by Palo Alto might break the functionality of the commands provided.
+2. This repository is not owned, operated, or officially maintained by Palo Alto Networks. Palo Alto Networks has no formal association with this repository, Powershell module, or any of the functionality it may provide. 
+
 ## Support / Issues
 
 Submit issues within the [GitHub Repository](https://github.com/tjobarow/PSPrismaAccessToolkit/issues).
 
 ## Author
 Thomas Obarowski
-- **Github**: tjobarow
-- **Email**: tjobarow@gmail.com
+- **[Github](https://github.com/tjobarow)**
+- **[LinkedIn](https://www.linkedin.com/in/tjobarow/)**
