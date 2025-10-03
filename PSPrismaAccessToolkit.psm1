@@ -13,8 +13,8 @@
 
 .TAGS          PrismaAccess, PaloAlto, SSL, Decryption, GlobalProtect, HAR, Automation, Troubleshooting
 
-.LICENSEURI    https://github.com/tjobarow/Palo-Alto-Prisma-Access-Powershell-Toolkit/blob/main/LICENSE
-.PROJECTURI    https://github.com/tjobarow/Palo-Alto-Prisma-Access-Powershell-Toolkit
+.LICENSEURI    https://github.com/tjobarow/PSPrismaAccessToolkit/blob/main/LICENSE
+.PROJECTURI    https://github.com/tjobarow/PSPrismaAccessToolkit
 
 .SYNOPSIS
     A collection of PowerShell functions for troubleshooting Prisma Access deployments, including SSL decryption validation, HAR file analysis, and GlobalProtect log parsing.
