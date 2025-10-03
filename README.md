@@ -7,13 +7,14 @@ Lightweight PowerShell toolkit for troubleshooting Palo Alto Networks Prisma Acc
 - Validate whether a website URL is being decrypted or not
 - Parse browser HAR capture files for any web URLs being decrypted
 - Extract unique domains from HAR files
+- Export TLS/SSL Certificate chain from target website into .CRT files
 - Export (certain) GlobalProtect log files to CSV, or an array of PSCustomObjects for further filtering in Powershell
 - Small, dependency-free module suitable for automation or interactive use
 
 ## Requirements
 
 - PowerShell 5.1 or PowerShell 7+
-- Module directory placed on a path listed in $env:PSModulePath
+- Certain functionality requires a local copy of the root certificate used in the SSL Decryption Forward Trust configuration.
 
 ## Installation
 
@@ -26,7 +27,12 @@ Manual install:
    Import-Module PSPrismaAccessToolkit
    ```
 
-(Optionally package and publish to an internal PowerShell Gallery for easier distribution.)
+Alternative Installation:
+1. Navigate to the local directory where `PSPrismaAccessToolkit` resides.
+2. Import the .psm1 module file
+   ```powershell
+   Import-Module PSPrismaAccessToolkit.psm1
+   ```
 
 ## Quick examples
 
@@ -72,6 +78,19 @@ Export-PanLogFileToCsv -Path ".\PanGPS.log" -Since "07/30/25 08:55" -ReturnObjec
 
 ___Note:___ This command can parse log files that are in the same log format as PanGPS.log or PanGPA.log. It has only been tested against PanGPS.log and PanGPA.log, though, so results may vary.
 
+### Export SSL certificate chain to CRT files
+
+Export the full SSL/TLS certificate chain presented by a remote host to individual .crt files (Base 64 encoded). Files are written to the current working directory — consider running in a dedicated folder to avoid accidental overwrites.
+
+```powershell
+# Simple: export chain for example.com (writes .crt files to current folder)
+Export-SSLCertificateChain -Hostname "example.com"
+
+# Use a custom port (e.g. 8443)
+Export-SSLCertificateChain -Hostname "internal.site" -Port 8443
+```
+_Note: Filenames are created from the common name of the certificate._
+
 ## Module commands
 
 Implemented functions (confirm with Get-Command):
@@ -79,6 +98,7 @@ Implemented functions (confirm with Get-Command):
 - Test-HarFileForDecryptedUrls
 - Get-HarFileUniqueDomains
 - Export-PanLogFileToCsv
+- Export-SSLCertificateChain
 
 ## Contributing
 

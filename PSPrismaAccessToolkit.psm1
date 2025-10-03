@@ -24,11 +24,11 @@
     - Test if Prisma Access is decrypting SSL traffic for a given host.
     - Analyze HAR files to determine SSL decryption status for failed requests.
     - Extract unique domains from HAR captures.
-    - Parse and export GlobalProtect VPN client logs for further analysis.
+    - Parse and exPort GlobalProtect VPN client logs for further analysis.
 
 .EXAMPLE
-    Test-SSLDecryption -hostname "outlook.com"
-    Test-SSLDecryption -hostname "outlook.com" -port 443 -RootCertPath ".\root.crt"
+    Test-SSLDecryption -Hostname "outlook.com"
+    Test-SSLDecryption -Hostname "outlook.com" -Port 443 -RootCertPath ".\root.crt"
 
 .EXAMPLE
     Test-HarFileForDecryptedUrls -HarFilePath ".\mycapture.har" -RootCertPath ".\root.crt"
@@ -45,75 +45,57 @@
 
 #>
 
-
-function Test-SSLDecryption {
+function Get-WebsiteCertChain {
     <#
     .SYNOPSIS
-        Tests if SSL decryption is occurring by checking if a specified root certificate is present in the certificate chain presented by a remote host.
+        Retrieve the SSL/TLS certificate chain presented by a remote host.
 
     .DESCRIPTION
-        The Test-SSLDecryption function connects to a specified hostname and port using SSL/TLS, retrieves the server's certificate chain, and checks if the provided root certificate is present in the chain. 
-        This can be used to determine if SSL decryption (such as by Prisma Access) is being performed, as the presence of the root certificate in the chain indicates interception.
+        Opens a TCP connection to the specified Hostname and Port, performs an SSL/TLS handshake,
+        and captures the certificate chain presented by the server. Returned certificates are
+        converted to System.Security.Cryptography.X509Certificates.X509Certificate2 objects and
+        stored in the script-scoped variable $script:ChainCerts for consumption by other functions.
 
-    .PARAMETER hostname
-        The DNS name or IP address of the remote host to test SSL decryption against. This parameter is mandatory.
+    .PARAMETER Hostname
+        The DNS name or IP address of the remote host to connect to. This parameter is mandatory.
 
-    .PARAMETER RootCertPath
-        The file path to the root certificate (in .crt format) to check for in the server's certificate chain. Defaults to ".\root.crt" if not specified.
+    .PARAMETER Port
+        TCP port to connect to on the remote host. Defaults to 443.
 
-    .PARAMETER port
-        The TCP port to connect to on the remote host. Defaults to 443.
-
-    .EXAMPLE
-        Test-SSLDecryption -hostname "example.com" -RootCertPath "C:\certs\myroot.crt"
-
-        Checks if the root certificate at "C:\certs\myroot.crt" is present in the certificate chain for "example.com" on port 443.
+    .OUTPUTS
+        System.Security.Cryptography.X509Certificates.X509Certificate2[]
+        An array of X509Certificate2 objects representing the certificate chain, or $null on error.
 
     .EXAMPLE
-        Test-SSLDecryption -hostname "internal.site" -port 8443
+        Get-WebsiteCertChain -Hostname "example.com"
+        Retrieves the certificate chain from example.com on port 443 and returns an array of X509Certificate2 objects.
 
-        Checks if the default root certificate ".\root.crt" is present in the certificate chain for "internal.site" on port 8443.
+    .EXAMPLE
+        $chain = Get-WebsiteCertChain -Hostname "internal.site" -Port 8443
+        foreach ($cert in $chain) { $cert.Subject }
 
     .NOTES
-        - Requires PowerShell to run on Windows with access to .NET classes.
-        - Useful for troubleshooting SSL decryption by security appliances such as Prisma Access.
-        - The function outputs a message indicating whether the root certificate is present in the chain.
-
+        - Requires network connectivity to the target host and .NET SslStream support (PowerShell/.NET).
+        - The function sets $script:ChainCerts which other functions (for example Export-SSLCertificateChain)
+        rely on; calling code may read that variable directly or use the return value.
+        - DNS resolution, TCP connect, or handshake failures will write errors or throw exceptions.
     #>
     param (
         [Parameter(Mandatory = $true)]
-        [string]$hostname,
-        [Parameter(Mandatory = $false)]
-        [string]$RootCertPath = ".\root.crt",
-        [int]$port = 443
+        [string]$Hostname,
+        [int]$Port = 443
     )
-    
-
-    if ( -not (Test-Path $RootCertPath)) {
-        throw "The value provided for -RootCertPath is not valid, or the default value of 'root.crt' does not exist at the specified path: `n $($RootCertPath)"
-    } 
     try {
-        # Load the provided root cert from the file system. If this cert is in
-        # chain presented by the website, decryption is happening
-        $ParamRootCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (Get-Item $RootCertPath).FullName
-    }
-    catch {
-        throw "An error was raised while attempting to load root certificate file: $($RootCertPath)"
-    }
-
-    try {
-        # Defining a TCP client that will connect to the hostname/port provided
+        # Defining a TCP client that will connect to the Hostname/Port provided
 
         try {
-            $tcpClient = New-Object System.Net.Sockets.TcpClient($hostname, $port)
-        }
-        catch {
+            $tcpClient = New-Object System.Net.Sockets.TcpClient($Hostname, $Port)
+        } catch {
             if ($_.Exception.Message -like "*No such host is known*") {
-                throw "The hostname provided ($($hostname)) could not be resolved via DNS. Please check the hostname and try again."
-            }
-            else {
+                throw "The Hostname provided ($($Hostname)) could not be resolved via DNS. Please check the Hostname and try again."
+            } else {
                 $($_.Exception.Message)
-                throw "A generic error was raised while establishing a TCP connect with the provided hostname ($($hostname))"
+                throw "A generic error was raised while establishing a TCP connect with the provided Hostname ($($Hostname))"
                 
             }
         }
@@ -157,38 +139,60 @@ function Test-SSLDecryption {
             $tcpClient.GetStream(), $false, $callback
         )
         
-        # This initiates the SSL connection with the server hostname provided
-        $sslStream.AuthenticateAsClient($hostname)
-
-        $ParamRootCertPresentInChain = $false
-        foreach ($cert in $script:ChainCerts) {
-            if ($cert.SerialNumber -eq $ParamRootCert.SerialNumber) {
-                $ParamRootCertPresentInChain = $true
-            }
-        }
-
-        if ($ParamRootCertPresentInChain) {
-            Write-Host "Prisma Access is trying to decrypt $($hostname)! Provided root certificate $($ParamRootCert.Subject) is present in certificate chain!" -BackgroundColor DarkRed -ForegroundColor White
-        }
-        else {
-            Write-Host "Prisma Access is NOT trying to decrypt $($hostname). Provided root certificate $($ParamRootCert.Subject) is NOT present in certificate chain!" -BackgroundColor DarkGreen -ForegroundColor White
-        }
-    }
-    catch {
+        # This initiates the SSL connection with the server Hostname provided
+        $sslStream.AuthenticateAsClient($Hostname)
+        return $script:ChainCerts
+    } catch {
         Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
-function Test-SslDecryptionHarHelper {
 
+function Test-SSLDecryption {
+    <#
+    .SYNOPSIS
+        Tests if SSL decryption is occurring by checking if a specified root certificate is present in the certificate chain presented by a remote host.
+
+    .DESCRIPTION
+        The Test-SSLDecryption function connects to a specified Hostname and Port using SSL/TLS, retrieves the server's certificate chain, and checks if the provided root certificate is present in the chain. 
+        This can be used to determine if SSL decryption (such as by Prisma Access) is being performed, as the presence of the root certificate in the chain indicates interception.
+
+    .PARAMETER Hostname
+        The DNS name or IP address of the remote host to test SSL decryption against. This parameter is mandatory.
+
+    .PARAMETER RootCertPath
+        The file path to the root certificate (in .crt format) to check for in the server's certificate chain. Defaults to ".\root.crt" if not specified.
+
+    .PARAMETER Port
+        The TCP Port to connect to on the remote host. Defaults to 443.
+
+    .EXAMPLE
+        Test-SSLDecryption -Hostname "example.com" -RootCertPath "C:\certs\myroot.crt"
+
+        Checks if the root certificate at "C:\certs\myroot.crt" is present in the certificate chain for "example.com" on Port 443.
+
+    .EXAMPLE
+        Test-SSLDecryption -Hostname "internal.site" -Port 8443
+
+        Checks if the default root certificate ".\root.crt" is present in the certificate chain for "internal.site" on Port 8443.
+
+    .NOTES
+        - Requires PowerShell to run on Windows with access to .NET classes.
+        - Useful for troubleshooting SSL decryption by security appliances such as Prisma Access.
+        - The function outputs a message indicating whether the root certificate is present in the chain.
+
+    #>
+    [CmdletBinding()]
     param (
         [Parameter(Mandatory = $true)]
-        [string]$hostname,
+        [string]$Hostname,
         [Parameter(Mandatory = $false)]
         [string]$RootCertPath = ".\root.crt",
-        [int]$port = 443
+        [int]$Port = 443,
+        [switch]$ReturnBoolean
     )
     
+
     if ( -not (Test-Path $RootCertPath)) {
         throw "The value provided for -RootCertPath is not valid, or the default value of 'root.crt' does not exist at the specified path: `n $($RootCertPath)"
     } 
@@ -196,74 +200,30 @@ function Test-SslDecryptionHarHelper {
         # Load the provided root cert from the file system. If this cert is in
         # chain presented by the website, decryption is happening
         $ParamRootCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (Get-Item $RootCertPath).FullName
-    }
-    catch {
+    } catch {
         throw "An error was raised while attempting to load root certificate file: $($RootCertPath)"
     }
 
     try {
-        # Defining a TCP client that will connect to the hostname/port provided
-        try {
-            $tcpClient = New-Object System.Net.Sockets.TcpClient($hostname, $port)
-        }
-        catch {
-            if ($_.Exception.Message -like "*No such host is known*") {
-                throw "The hostname provided ($($hostname)) could not be resolved via DNS. Please check the hostname and try again."
-            }
-            else {
-                $($_.Exception.Message)
-                throw "A generic error was raised while establishing a TCP connect with the provided hostname ($($hostname))"
-                
-            }
-        }
-        
-        #Empty script-scoped certs list will later be set to list of certs
-        # provided by the website URL
-        $script:ChainCerts = @()
-
-        <#
-        Defining a callback function that will enumerate the cert chain 
-        provided by the website's SSL stream, and save each cert to a locally
-        scoped list. Then, modify the script scoped "certs" variable to
-        save the list outside the callback function scope
-        #> 
-            
-        $callback = {
-            param(
-                $senderObj,
-                $certificate, 
-                $chain, 
-                $sslPolicyErrors
-            )
-            $certificates = @()
-            foreach ($element in $chain.ChainElements) {
-                $certificates += [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($element.Certificate.RawData)
-            }
-            Set-Variable ChainCerts -Value $certificates -Scope Script
-            return $true
-        }
-        <#
-         Create an SSL stream using the TCP client, provide False to close the
-         stream after the provided callback is function is complete
-        #>
-        $sslStream = New-Object System.Net.Security.SslStream(
-            $tcpClient.GetStream(), $false, $callback
-        )
-        
-        # This initiates the SSL connection with the server hostname provided
-        $sslStream.AuthenticateAsClient($hostname)
-
+        Get-WebsiteCertChain -Hostname $Hostname -Port $Port | Out-Null
         $ParamRootCertPresentInChain = $false
         foreach ($cert in $script:ChainCerts) {
             if ($cert.SerialNumber -eq $ParamRootCert.SerialNumber) {
                 $ParamRootCertPresentInChain = $true
             }
         }
-        return $ParamRootCertPresentInChain       
-    }
-    catch {
-        Write-Host $_.Exception.Message
-        throw "Error while attempting to test SSL decryption towards $($hostname):$($port)"
+
+        if ($ReturnBoolean) {
+            return $ParamRootCertPresentInChain
+        }
+
+        if ($ParamRootCertPresentInChain) {
+            Write-Host "Prisma Access is trying to decrypt $($Hostname)! Provided root certificate $($ParamRootCert.Subject) is present in certificate chain!" -BackgroundColor DarkRed -ForegroundColor White
+        } else {
+            Write-Host "Prisma Access is NOT trying to decrypt $($Hostname). Provided root certificate $($ParamRootCert.Subject) is NOT present in certificate chain!" -BackgroundColor DarkGreen -ForegroundColor White
+        }
+    } catch {
+        Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
@@ -293,6 +253,7 @@ function Test-HarFileForDecryptedUrls {
         - Outputs a formatted table showing the decryption status for each tested URL.
 
     #>
+    [CmdletBinding()]
     param (
         [string]$HarFilePath,
         [string]$RootCertPath = "root.crt"
@@ -315,10 +276,10 @@ function Test-HarFileForDecryptedUrls {
     $Results = @()
     foreach ($entry in $HAREntriesWithNonSuccessResponse) {
         Write-Host "Testing URL $($entry.request.url)"
-        if ($entry.request.url -like "http://*") { $port = 80 }
-        else { $port = 443 }
+        if ($entry.request.url -like "http://*") { $Port = 80 }
+        else { $Port = 443 }
         $domain = ($entry.request.url -replace '^https?://(www\.)?', '') -replace '/.*$', ''
-        $Decrypted = Test-SslDecryptionHarHelper -hostname $domain -port $port
+        $Decrypted = Test-SslDecryption -Hostname $domain -Port $Port -RootCertPath $RootCertPath -ReturnBoolean
         $Results += [pscustomobject]@{
             OriginalURL        = $entry.request.url
             OriginalStatusCode = $entry.response.status
@@ -345,8 +306,7 @@ function Test-HarFileForDecryptedUrls {
         Expression = { 
             if ($_.OriginalURL.Length -gt 60) { 
                 $_.OriginalURL.Substring(0, 57) + "..." 
-            }
-            else { 
+            } else { 
                 $_.OriginalURL
             } 
         }
@@ -385,6 +345,7 @@ function Get-HarFileUniqueDomains {
         - Outputs the list of domains in a formatted table.
 
     #>
+    [CmdletBinding()]
     param (
         [Parameter(Mandatory = $true)]
         [string]$HarFilePath
@@ -402,8 +363,7 @@ function Get-HarFileUniqueDomains {
         ForEach-Object {
             try {
                 ([System.Uri]$_).Host
-            }
-            catch {
+            } catch {
                 $null
             }
         } |
@@ -417,7 +377,7 @@ function Get-HarFileUniqueDomains {
 function Export-PanLogFileToCsv {
     <#
     .SYNOPSIS
-        Parses certain GlobalProtect log files and exports the structured log 
+        Parses certain GlobalProtect log files and exPorts the structured log 
         entries to a CSV file, or returns them as a list of PsCustomObjects.
 
     .DESCRIPTION
@@ -430,7 +390,7 @@ function Export-PanLogFileToCsv {
         (P7255-T15641)Dump (1010): 09/03/99 00:05:03:207 HandleDnsCallBack enter...
         (P7255-T15641)Dump (1055): 09/03/99 00:05:03:207 HandleDnsCallBack isPv6=0, from virtual interace=0
         
-        It supports filtering logs by a specified date/time, limiting the number of parsed lines for testing, and optionally returning the parsed objects instead of exporting to CSV.
+        It supPorts filtering logs by a specified date/time, limiting the number of parsed lines for testing, and optionally returning the parsed objects instead of exPorting to CSV.
         This function is useful for analyzing VPN client logs, troubleshooting issues, and converting logs into a format suitable for further analysis in Excel or other tools.
 
     .PARAMETER Path
@@ -440,7 +400,7 @@ function Export-PanLogFileToCsv {
         (Optional) Only include log entries with a timestamp greater than or equal to this date/time. Accepts any valid PowerShell datetime string.
 
     .PARAMETER ReturnObject
-        (Optional) If specified, returns the parsed log entries as objects instead of exporting to a CSV file.
+        (Optional) If specified, returns the parsed log entries as objects instead of exPorting to a CSV file.
 
     .PARAMETER TestingMode
         (Optional) If specified, limits parsing to the first 10,000 log lines for faster testing.
@@ -448,12 +408,12 @@ function Export-PanLogFileToCsv {
     .EXAMPLE
         Export-PanLogFileToCsv -Path ".\PanGPA.log"
 
-        Parses the PanGPA.log file and exports all parsed log entries to a CSV file in the current directory.
+        Parses the PanGPA.log file and exPorts all parsed log entries to a CSV file in the current directory.
 
     .EXAMPLE
         Export-PanLogFileToCsv -Path ".\PanGPS.log" -Since "07/30/25 08:55" -ReturnObject
 
-        Parses the PanGPS.log file, includes only entries since the specified date/time, and returns the parsed objects instead of exporting to CSV.
+        Parses the PanGPS.log file, includes only entries since the specified date/time, and returns the parsed objects instead of exPorting to CSV.
 
     .NOTES
         - Requires PowerShell and access to .NET classes.
@@ -461,6 +421,7 @@ function Export-PanLogFileToCsv {
         - The output CSV file is named based on the log file and current date/time.
 
     #>
+    [CmdletBinding()]
     param (
         [Parameter(Mandatory = $true)]
         [string]$Path,
@@ -491,8 +452,7 @@ function Export-PanLogFileToCsv {
     if ($Since) {
         try {
             $SinceDateTime = [datetime]$Since
-        }
-        catch {
+        } catch {
             Write-Host "Could not parse Since $($Since) to datetime. Please provide a valid date/time format (e.g 07/30/25 08:55)"
         }
     }
@@ -539,25 +499,21 @@ function Export-PanLogFileToCsv {
                 $adjusted_timestamp = $matches[5] -replace ':(\d{3})$', '.${1}'
                 $CurrentEntry.Timestamp = [datetime]::ParseExact($adjusted_timestamp, 'MM/dd/yy HH:mm:ss.fff', $null)
                 $CurrentEntry.Message = $matches[6]
-            }
-            else {
+            } else {
                 Write-Host "Log line did not match regex!"
                 Write-Host $line
             }
             Write-Host "$($LineNumber): $line"
-        }
-        elseif ($CurrentEntry) {
+        } elseif ($CurrentEntry) {
             $CurrentEntry.RawText += "`n" + $line
             if ($CurrentEntry.Message) {
                 $CurrentEntry.Message += "`n" + $line
             }
             #Write-Host "Appended continuation of log to previous log entry $($LineNumber)."
             Write-Host "$($LineNumber): $line"
-        }
-        elseif ((($i + 1) -eq $RawLogEntries.Count) -and $CurrentEntry) {
+        } elseif ((($i + 1) -eq $RawLogEntries.Count) -and $CurrentEntry) {
             $ParsedLogEntries += $CurrentEntry
-        }
-        else {
+        } else {
             Write-Host "WARNING: Line did not match log line regex, and does not seem to be a continuation of a previous log."
             Write-Host "$($line)"
         }
@@ -571,11 +527,83 @@ function Export-PanLogFileToCsv {
 
     if ($ReturnObject) {
         return $ParsedLogEntries
-    }
-    else {
+    } else {
         $FileName = ".\$($LogFileName)_logs_parsed_$((Get-Date -Format 'yyyy-MM-dd_HH-mm').ToString()).csv"
         $ParsedLogEntries | Export-Csv -Path $FileName
         Write-Host "Exported parsed logs to CSV: $($FileName)"
+    }
+}
+
+function Export-SSLCertificateChain {
+    <#
+    .SYNOPSIS
+        Export the SSL/TLS certificate chain presented by a remote host to individual PEM (.crt) files.
+
+    .DESCRIPTION
+        Connects to the specified Hostname and Port, retrieves the server's certificate chain (via Get-WebsiteCertChain),
+        and exports each certificate as a PEM encoded .crt file in the current directory. Each file is named using the
+        certificate Subject's Common Name (CN). The function sets ErrorActionPreference to Stop and wraps network and
+        file operations in try/catch blocks to produce meaningful error messages.
+
+    .PARAMETER Hostname
+        The DNS name or IP address of the remote host to query for its SSL/TLS certificate chain. This parameter is mandatory.
+
+    .PARAMETER Port
+        TCP port to connect to on the remote host. Defaults to 443.
+
+    .OUTPUTS
+        Writes one or more .crt files to the current working directory and emits status messages to the host.
+        The function does not return objects (it returns $null).
+
+    .EXAMPLE
+        Export-SSLCertificateChain -Hostname "example.com"
+
+        Retrieves the certificate chain from example.com on port 443 and exports each certificate as a .crt file
+        named by the certificate CN into the current directory.
+
+    .EXAMPLE
+        Export-SSLCertificateChain -Hostname "web.site" -Port 8443
+
+        Retrieves and exports the certificate chain from web.site:8443.
+
+    .NOTES
+        - Requires the Get-WebsiteCertChain helper function to be available in the module scope.
+        - Filenames are derived from the certificate Subject CN; duplicate CNs or invalid filename characters may cause
+        unexpected behavior or file overwrite. Consider running in a dedicated output directory.
+        - Certificates are exported in PEM format with ASCII encoding using base64 lines inserted for readability.
+        - Compatible with PowerShell 5.1+ due to split-based CN extraction and .NET certificate usage.
+    #>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Hostname,
+        [int]$Port = 443
+    )
+    $ErrorActionPreference = "Stop"
+
+    try {
+        $ChainCerts = Get-WebsiteCertChain -Hostname $Hostname -Port $Port
+    } catch {
+        Write-Error $_.Exception.Message
+        Write-Error "An error was raised while attempting to connect to $($Hostname):$($Port) and retrieve the certificate chain."
+    }
+
+    try {
+        foreach ($cert in $ChainCerts) {
+            # Keep older -split style to support PS5.1 compatability
+            $CertName = (($cert.Subject -split "CN=")[1] -split ", ")[0]
+            $ExportFilePath = ".\$($CertName).crt"
+            $CertContent = @(
+                '-----BEGIN CERTIFICATE-----'
+                [System.Convert]::ToBase64String($cert.RawData, 'InsertLineBreaks')
+                '-----END CERTIFICATE-----'
+            )
+            $CertContent | Out-File -FilePath $ExportFilePath -Encoding ascii
+            Write-Host "Exported certificate to $($ExportFilePath)"
+        }
+    } catch {
+        Write-Error $_.Exception.Message
+        Write-Error "An error was raised while trying to export each certificate to a file."
     }
 }
 
@@ -583,3 +611,4 @@ Export-ModuleMember -Function Test-SSLDecryption
 Export-ModuleMember -Function Test-HarFileForDecryptedUrls
 Export-ModuleMember -Function Get-HarFileUniqueDomains
 Export-ModuleMember -Function Export-PanLogFileToCsv
+Export-ModuleMember -Function Export-SSLCertificateChain
