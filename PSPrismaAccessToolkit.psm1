@@ -34,7 +34,7 @@
     Test-HarFileForDecryptedUrls -HarFilePath ".\mycapture.har" -RootCertPath ".\root.crt"
 
 .EXAMPLE
-    Get-HarFileUniqueDomains -Path ".\mycapture.har"
+    Get-HarFileUniqueDomains -HarFilePath ".\mycapture.har"
 
 .EXAMPLE
     Export-PanLogFileToCsv -Path ".\PanGPS.log"
@@ -371,11 +371,11 @@ function Get-HarFileUniqueDomains {
         The Get-HarFileUniqueDomains function parses a HAR file, extracts all URLs from the HTTP requests, and returns a sorted list of unique domain names found in the file.
         This is useful for quickly identifying which domains are present in a web traffic capture.
 
-    .PARAMETER Path
+    .PARAMETER HarFilePath
         The file path to the HAR file to analyze.
 
     .EXAMPLE
-        Get-HarFileUniqueDomains -Path ".\mycapture.har"
+        Get-HarFileUniqueDomains -HarFilePath ".\mycapture.har"
 
         Lists all unique domains found in the HAR file "mycapture.har".
 
@@ -387,15 +387,15 @@ function Get-HarFileUniqueDomains {
     #>
     param (
         [Parameter(Mandatory = $true)]
-        [string]$Path
+        [string]$HarFilePath
     )
 
-    if (-not(Test-Path $path)) {
-        throw "No HAR file located at $($Path)"
+    if (-not(Test-Path $HarFilePath)) {
+        throw "No HAR file located at $($HarFilePath)"
         exit 1
     }
 
-    $HARFileContents = Get-Content -Path $Path -ErrorAction Stop | ConvertFrom-Json
+    $HARFileContents = Get-Content -Path $HarFilePath -ErrorAction Stop | ConvertFrom-Json
     $HARFileUniqueUrls = $HARFileContents.log.entries | 
         Select-Object -ExpandProperty request |
         Select-Object -ExpandProperty url |
