@@ -59,7 +59,7 @@ ___Note:___ _This command must be ran from the affected endpoint where decryptio
 
 Lists all unique domains found in the HAR file "mycapture.har".
 ```powershell
-Get-HarFileUniqueDomains -Path ".\mycapture.har"
+Get-HarFileUniqueDomains -HarFilePath ".\mycapture.har"
 ```
 
 ### Export Palo Alto/GlobalProtect logs to CSV:
