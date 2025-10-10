@@ -40,7 +40,10 @@ Import module and list commands:
 ```powershell
 Import-Module PSPrismaAccessToolkit
 Get-Command -Module PSPrismaAccessToolkit
-# Get help for a specific command
+```
+
+Get help with a particular command:
+```powershell
 Get-Help -Name Test-SSLDecryption -Full
 ```
 
