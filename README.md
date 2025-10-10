@@ -61,6 +61,20 @@ Test-HarFileForDecryptedUrls -HarFilePath ".\mycapture.har" -RootCertPath ".\roo
 ```
 ___Note:___ _This command must be ran from the affected endpoint where decryption might be taking place. It uses a derivative of the above ```Test-SSLDecryption``` command behind the scenes_.
 
+### Look for any evidence of Palo blocking requests in HAR capture file
+
+Analyzes ".\mycapture.har", looking for the presence of any redirected requests,
+where the redirected URL seems to belong to a Palo Alto block page. Will also
+display other failed requests that the command is unsure if Palo might be
+contributing to the failure of.
+
+```powershell
+# Including the -PaloBlockUrlMustBePresent only returns results where the command
+# definitively knows Palo is blocking the request.
+# See help for more parameters.
+Test-HarFileForBlockedUrls -HarFilePath .\mycapture.har -PaloBlockUrlMustBePresent
+```
+
 ### Get unique domains from a HAR file
 
 Lists all unique domains found in the HAR file "mycapture.har".
@@ -96,6 +110,7 @@ _Note: Filenames are created from the common name of the certificate._
 Implemented functions (confirm with Get-Command):
 - Test-SSLDecryption
 - Test-HarFileForDecryptedUrls
+- Test-HarFileForBlockedUrls
 - Get-HarFileUniqueDomains
 - Export-PanLogFileToCsv
 - Export-SSLCertificateChain

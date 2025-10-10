@@ -322,6 +322,212 @@ function Test-HarFileForDecryptedUrls {
     }
 }
 
+function Test-HarFileForBlockedUrls {
+    <#
+    .SYNOPSIS
+        Detects potentially Palo Alto / Prisma Access blocked traffic, by 
+        looking for redirects in a HAR (HTTP Archive) file.
+
+    .DESCRIPTION
+        Parses a HAR file and identifies requests that did not complete successfully (non-2xx responses).
+        Classifies requests as redirected (3xx) or failed, annotates preflight (CORS OPTIONS) entries,
+        and heuristically marks redirects that point to URLs containing "block" as likely Palo Alto block pages.
+        Results can be filtered to only include definite Palo block redirects, exclude preflight requests,
+        or returned as objects for further processing.
+
+    .PARAMETER HarFilePath
+        Path to the HAR file to analyze. The file must be a valid HAR JSON (Chrome/Firefox export).
+        This parameter is mandatory.
+
+    .PARAMETER PaloBlockUrlMustBePresent
+        If specified, only returns entries where the redirect URL contains the substring "block"
+        (i.e. entries marked as definite Palo blocking).
+
+    .PARAMETER IncludePreflightRequests
+        If specified, includes CORS preflight (OPTIONS) requests in the output. By default preflight
+        requests are excluded from the displayed results (they are still analyzed).
+
+    .PARAMETER ReturnObjects
+        If specified, the function returns an array of PSCustomObject entries representing the findings
+        instead of writing a formatted list to the host. Useful for scripting or further filtering.
+
+    .OUTPUTS
+        System.Object[] (PSCustomObject)
+        An array of objects with properties: TargetDomain, TargetURL, HTTPMethod, ResponseStatusCode,
+        IsPreflightRequest, ErrorCode, WasRedirected, WasPaloBlocking, RedirectedToUrl, TimestampLocalTime.
+        If ReturnObjects is not set the function writes a colored, human-friendly Format-List to the console.
+
+    .EXAMPLE
+        Test-HarFileForBlockedUrls -HarFilePath .\capture.har
+
+        Analyze the HAR file and print possible blocked/redirected resources.
+
+    .EXAMPLE
+        Test-HarFileForBlockedUrls -HarFilePath .\capture.har -PaloBlockUrlMustBePresent
+
+        Show only entries where the redirect destination appears to be a Palo/blocked page.
+
+    .EXAMPLE
+        $results = Test-HarFileForBlockedUrls -HarFilePath .\capture.har -ReturnObjects
+
+        Return objects for programmatic consumption (filtering, export to CSV, etc).
+
+    .EXAMPLE
+        $results = Test-HarFileForBlockedUrls -HarFilePath .\capture.har -IncludePreflightRequests
+
+        Will include CORS preflight (OPTIONS) requests in the output, if they are shown to be blocked/redirected.
+
+    .NOTES
+        - Requires PowerShell and a HAR (JSON) capture file from a browser.
+        - The detection is heuristic: a redirect URL containing "block" is 
+            treated as likely Palo blocking, but absence of that substring 
+            does not guarantee Palo is not involved.
+        - The function expects HAR entries to contain request.url and 
+            response.status fields and ignores requests that do not have these..
+        - Output includes ANSI color codes for readability in terminals that 
+            support them.
+    #>
+    [CmdletBinding()]
+    param (
+        [string]$HarFilePath,
+        [switch]$PaloBlockUrlMustBePresent,
+        [switch]$IncludePreflightRequests,
+        [switch]$ReturnObjects
+    )
+
+    if (-not(Test-Path $HarFilePath)) {
+        throw "No HAR file located at $($HarFilePath)"
+        exit 1
+    }
+
+    # Load HAR file contents
+    $HARFileContents = Get-Content -Path $HarFilePath -ErrorAction Stop | ConvertFrom-Json
+    # Filter to only log requests that are not successful (not 2xx status code),
+    # and whose request data is not null, and whose request URL is not null
+    $FailedRequestEnteries = $HARFileContents.log.entries | Where-Object {
+        ($_.response.status -lt 200 -or $_.response.status -ge 300 ) -and `
+        ($null -ne $_.request -and $null -ne $_.request.url)
+    }
+    Write-Host "Found $($FailedRequestEnteries.Count) requests that were not successful within HAR capture."
+
+
+    $FailedRequestEnteries | ForEach-Object {
+        # If the resourceType is preflight, that means the request is an OPTIONS
+        # Request sent to the server to check CORS permissions. These requests
+        # check if the browser can send the (in this case) redirect request to Palo
+        # But palo will block these also 😅, efffectively breaking their own
+        # flow. So we mark these requests as "IsPreflightRequestToRedirect"
+        if ($_._resourceType -eq "preflight") {
+            $_ | Add-Member -MemberType NoteProperty -Name "IsPreflightRequestToRedirect" -Value $true
+        } else {
+            $_ | Add-Member -MemberType NoteProperty -Name "IsPreflightRequestToRedirect" -Value $false
+        }
+
+        # If the request has a redirect status code
+        if ($_.response.status -ge 300 -and $_.response.status -lt 400) {
+            # If the request has a redirectURL property, and it contains the word "block"
+            # This more or less means Palo is redirecting the request to a block page
+            if ($null -ne $_.response.redirectURL -and $_.response.redirectURL -like "*block*") {
+                $_ | Add-Member -MemberType NoteProperty -Name "IsPaloBlocking" -Value "Yes"
+                $_ | Add-Member -MemberType NoteProperty -Name "IsRedirected" -Value $true
+                #$FailedRequestsWithRedirectYesPalo += $_
+            } 
+            # Else if there is no redirect URL, or it doesn't contain the word "block"
+            # It's unlikely a Palo block
+            else {
+                $_ | Add-Member -MemberType NoteProperty -Name "IsPaloBlocking" -Value "Unlikely"
+                $_ | Add-Member -MemberType NoteProperty -Name "IsRedirected" -Value $true
+                #$FailedRequestsWithRedirectUnlikelyPalo += $_
+            }
+        
+        }
+        # If a page failed to load (non 2xx status code) but was redirect,
+        # We just list that we are unsure if Palo is blocking it
+        else {
+            $_ | Add-Member -MemberType NoteProperty -Name "IsPaloBlocking" -Value "Unsure"
+            $_ | Add-Member -MemberType NoteProperty -Name "IsRedirected" -Value $false
+            #$FailedRequestsWithNoRedirects += $_
+        }
+    }
+    
+    # Create a custom object for each failed request, extracting relevant properties
+    # so it's easier to format and print later
+    $Results = @()
+    foreach ($entry in $FailedRequestEnteries) {
+        $domain = ($entry.request.url -replace '^https?://(www\.)?', '') -replace '/.*$', ''
+        $Results += [pscustomobject]@{
+            TargetDomain       = $domain
+            TargetURL          = $entry.request.url
+            HTTPMethod         = $entry.request.method
+            ResponseStatusCode = $entry.response.status
+            IsPreflightRequest = $entry.IsPreflightRequestToRedirect
+            ErrorCode          = $entry.response._error
+            WasRedirected      = $entry.IsRedirected
+            WasPaloBlocking    = $entry.IsPaloBlocking
+            RedirectedToUrl    = $entry.response.redirectURL
+            #This timestamp conversion method is compatible with PS 5.1 & PS 7
+            TimestampLocalTime = ([datetimeoffset]$entry.startedDateTime).ToLocalTime().DateTime
+        }
+    }
+
+    # If the flag is set to only show requests that definitevely contain
+    # a Palo block URL, filter the results to only those
+    if ($PaloBlockUrlMustBePresent) {
+        $Results = $Results | Where-Object { $_.WasPaloBlocking -eq "Yes" }
+    }
+
+    # If IncludePreflightRequests is not set, filter out any requests
+    # that are preflight requests
+    if (-not $IncludePreflightRequests) {
+        $Results = $Results | Where-Object { $_.IsPreflightRequest -eq $false }
+    }
+
+    # Is the flag ReturnObjects is set, just return the object, not print results
+    if ($ReturnObjects) {
+        return $Results
+    }
+
+    $Results | Format-List TimestampLocalTime, TargetDomain, TargetURL, HTTPMethod, `
+        ResponseStatusCode, ErrorCode, `
+    @{
+        Label      = "Is Preflight Request?"
+        Expression = 
+        {
+            if ($_.IsPreflightRequest) {
+                $color = '35'
+            } else {
+                $color = '32'
+            }
+            $e = [char]27
+            "$e[${color}m$($_.IsPreflightRequest)${e}[0m"
+        }
+    }, @{
+        Label      = "Was Redirected?"
+        Expression = 
+        {
+            switch ($_.WasRedirected) {
+                $false { $color = '32'; break }
+                $true { $color = '31'; break }
+                default { $color = "0" }
+            }
+            $e = [char]27
+            "$e[${color}m$($_.WasRedirected)${e}[0m"
+        }
+    }, @{
+        Label      = "Was Palo Alto Blocking?"
+        Expression = {
+            switch -Exact ($_.WasPaloBlocking) {
+                'Unsure' { $color = '35'; break }
+                'Yes' { $color = '31'; break }
+                'Maybe' { $color = '33'; break }
+                default { $color = "0" }
+            }
+            $e = [char]27
+            "$e[${color}m$($_.WasPaloBlocking)${e}[0m"
+        }
+    }, RedirectedToUrl
+}
+
 function Get-HarFileUniqueDomains {
     <#
     .SYNOPSIS
@@ -612,3 +818,4 @@ Export-ModuleMember -Function Test-HarFileForDecryptedUrls
 Export-ModuleMember -Function Get-HarFileUniqueDomains
 Export-ModuleMember -Function Export-PanLogFileToCsv
 Export-ModuleMember -Function Export-SSLCertificateChain
+Export-ModuleMember -Function Test-HarFileForBlockedUrls
